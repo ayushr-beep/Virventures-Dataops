@@ -24,7 +24,7 @@ st.set_page_config(
 
 def get_logo_b64():
     try:
-        logo_path = Path(__file__).parent / "logo.jpg"
+        logo_path = Path(__file__).parent / "virventures_com_logo.jpg"
         if logo_path.exists():
             return base64.b64encode(logo_path.read_bytes()).decode()
     except: pass
@@ -463,11 +463,11 @@ def fill_row(asin, fba_row, arch_l, arch_r, brand, restricted_set):
 
     # INV(A-Z) — SKU from archive left
     v, k = get_src_val(arch_l, "sku(A-Z)","sku","SKU")
-    fill("INV(A-Z)", v or "No Records", f"Archive(A-Z).{k}" if v else "—")
+    fill("INV(A-Z)", v or "N/A", f"Archive(A-Z).{k}" if v else "—")
 
     # INV(Z-A) — SKU from archive right
     v, k = get_src_val(arch_r, "sku(Z-A)","sku","SKU")
-    fill("INV(Z-A)", v or "No Records", f"Archive(Z-A).{k}" if v else "—")
+    fill("INV(Z-A)", v or "N/A", f"Archive(Z-A).{k}" if v else "—")
 
     # Listing Status
     v, k = get_src_val(fba, "afn-listing-exists","mfn-listing-exists","listing")
@@ -475,7 +475,7 @@ def fill_row(asin, fba_row, arch_l, arch_r, brand, restricted_set):
         normalized = "Listed" if v.lower() in ("yes","true","1","active","listed") else "Not Listed"
         fill("Listing Status", normalized, f"FBA.{k}")
     else:
-        fill("Listing Status", "No Records", "—")
+        fill("Listing Status", "N/A", "—")
 
     # Restricted
     brand_lower = brand.strip().lower() if brand else ""
@@ -484,15 +484,15 @@ def fill_row(asin, fba_row, arch_l, arch_r, brand, restricted_set):
 
     # SKU Status(A-Z)
     v, k = get_src_val(arch_l, "sku(A-Z)","sku","SKU")
-    fill("SKU Status(A-Z)", v or "No Records", f"Archive(A-Z).{k}" if v else "—")
+    fill("SKU Status(A-Z)", v or "N/A", f"Archive(A-Z).{k}" if v else "—")
 
     # SKU Status(Z-A)
     v, k = get_src_val(arch_r, "sku(Z-A)","sku","SKU")
-    fill("SKU Status(Z-A)", v or "No Records", f"Archive(Z-A).{k}" if v else "—")
+    fill("SKU Status(Z-A)", v or "N/A", f"Archive(Z-A).{k}" if v else "—")
 
     # No Records columns
     for col in NO_RECORDS_COLS:
-        fill(col, "No Records", "—")
+        fill(col, "N/A", "—")
 
     # Sales 30 / 3 / 1
     for col, aliases in [
@@ -501,7 +501,7 @@ def fill_row(asin, fba_row, arch_l, arch_r, brand, restricted_set):
         ("Sales 1",  ["Sales 1","sales1","1 day sales"]),
     ]:
         v, k = get_src_val(fba, *aliases)
-        fill(col, v or "No Records", f"FBA.{k}" if v else "—")
+        fill(col, v or "N/A", f"FBA.{k}" if v else "—")
 
     # Stock
     v, k = get_src_val(fba, "STOCK","afn-fulfillable-quantity","fulfillable")
@@ -531,20 +531,20 @@ def fill_row(asin, fba_row, arch_l, arch_r, brand, restricted_set):
     try:
         sv  = safe_float(result.get("Stock",("0",""))[0])
         s30 = safe_float(result.get("Sales 30",("0",""))[0])
-        fill("Days of stock(30)", str(round(sv/(s30/30),1)) if s30>0 else "No Records",
+        fill("Days of stock(30)", str(round(sv/(s30/30),1)) if s30>0 else "N/A",
              "Stock÷(Sales30÷30)" if s30>0 else "Sales 30 unavailable")
-    except: fill("Days of stock(30)", "No Records", "—")
+    except: fill("Days of stock(30)", "N/A", "—")
 
     # Days of stock(3)
     try:
         sv = safe_float(result.get("Stock",("0",""))[0])
         s3 = safe_float(result.get("Sales 3",("0",""))[0])
-        fill("Days of stock(3)", str(round(sv/(s3/3),1)) if s3>0 else "No Records",
+        fill("Days of stock(3)", str(round(sv/(s3/3),1)) if s3>0 else "N/A",
              "Stock÷(Sales3÷3)" if s3>0 else "Sales 3 unavailable")
-    except: fill("Days of stock(3)", "No Records", "—")
+    except: fill("Days of stock(3)", "N/A", "—")
 
     # Brand
-    fill("Brand", brand.strip() if brand and brand.strip() else "No Records", "Analysis file")
+    fill("Brand", brand.strip() if brand and brand.strip() else "N/A", "Analysis file")
 
     return {col: val for col, (val, _) in result.items()}
 
@@ -777,7 +777,7 @@ with tab_run:
             if not is_asin(asin):
                 nr = row.to_dict()
                 for col in TARGET_COLS:
-                    if col not in nr: nr[col] = "No Records"
+                    if col not in nr: nr[col] = "N/A"
                 out_rows.append(nr); continue
 
             fba_row   = fba_map.get(asin)
@@ -789,7 +789,7 @@ with tab_run:
             if not any([fba_row, arch_l_row, arch_r_row]): no_match += 1
 
             filled = fill_row(asin, fba_row, arch_l_row, arch_r_row, brand, restricted_set)
-            filled_cells += sum(1 for v in filled.values() if v not in ("No Records","0","—"))
+            filled_cells += sum(1 for v in filled.values() if v not in ("N/A","0","—"))
 
             if filled.get("Restricted","").startswith("Yes"): restricted_count += 1
 
@@ -802,7 +802,7 @@ with tab_run:
             # anomalies
             sv   = safe_float(nr.get("Stock",0))
             s30  = safe_float(nr.get("Sales 30",0))
-            dos  = safe_float(nr.get("Days of stock(30)",999) if nr.get("Days of stock(30)","") not in ("No Records","") else 999)
+            dos  = safe_float(nr.get("Days of stock(30)",999) if nr.get("Days of stock(30)","") not in ("N/A","") else 999)
             is_r = nr.get("Restricted","").startswith("Yes")
             lst  = str(nr.get("Listing Status","")).lower()
 
@@ -822,7 +822,7 @@ with tab_run:
         prog.progress(94)
         out_df = pd.DataFrame(out_rows)
         for col in TARGET_COLS:
-            if col not in out_df.columns: out_df[col] = "No Records"
+            if col not in out_df.columns: out_df[col] = "N/A"
         extra = [c for c in out_df.columns if c not in TARGET_COLS]
         out_df = out_df[TARGET_COLS + extra]
 
@@ -908,7 +908,7 @@ with tab_dash:
 
         st.markdown("#### 🔻 Top 10 Lowest Stock ASINs")
         if "Stock" in out_df.columns:
-            tmp = out_df[out_df["Stock"].apply(lambda v: str(v) not in ("No Records",""))].copy()
+            tmp = out_df[out_df["Stock"].apply(lambda v: str(v) not in ("N/A",""))].copy()
             tmp["_s"] = tmp["Stock"].apply(safe_float)
             show = [c for c in ["Output ASIN","Brand","Stock","Days of stock(30)","Sales 30","Listing Status"] if c in tmp.columns]
             st.dataframe(tmp.nsmallest(10,"_s")[show], use_container_width=True, hide_index=True)
