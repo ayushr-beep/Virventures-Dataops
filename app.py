@@ -39,8 +39,15 @@ html,body,[class*="css"]{font-family:'Inter',sans-serif;}
 
 /* ── BASE ── */
 .stApp{background:#F5F6FA;color:#1E2D4E;}
-.block-container{padding-top:0!important;max-width:1400px;}
+.block-container{padding-top:0!important;padding-left:1rem!important;padding-right:1rem!important;max-width:1400px;}
 section[data-testid="stSidebar"]{display:none;}
+
+/* hide streamlit chrome so topbar shows fully */
+#MainMenu{visibility:hidden!important;}
+header[data-testid="stHeader"]{height:0!important;min-height:0!important;visibility:hidden!important;}
+footer{visibility:hidden!important;}
+[data-testid="stToolbar"]{display:none!important;}
+div[data-testid="stDecoration"]{display:none!important;}
 
 /* ── TOPBAR ── */
 .topbar{
