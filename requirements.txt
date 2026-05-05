@@ -1,5 +1,5 @@
-streamlit
+-e streamlit
 pandas
 openpyxl
 xlrd
- 
+supabase
