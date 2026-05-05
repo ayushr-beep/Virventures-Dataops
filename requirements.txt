@@ -2,4 +2,7 @@
 pandas
 openpyxl
 xlrd
-supabase
+supabase==2.3.4
+gotrue==2.4.2
+httpx==0.24.1
+postgrest==0.16.1
