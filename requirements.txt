@@ -1,5 +1,0 @@
--e streamlit
-pandas
-openpyxl
-xlrd
-supabase==2.7.4
