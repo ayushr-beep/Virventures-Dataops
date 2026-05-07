@@ -205,15 +205,29 @@ def smart_col(df, targets, threshold=0.52):
     return None,None
 
 def detect_asin_col(df, sample=60):
+    # First: try exact header name match
+    for col in df.columns:
+        if str(col).strip().lower() == "asin":
+            return col, 100.0
+    # Second: pattern scan — use more rows for files where ASINs start lower
+    scan = min(len(df), max(sample, 200))
     best_col,best_score=None,0.0
     for col in df.columns:
-        vals=df[col].head(sample).astype(str).str.strip()
+        vals=df[col].head(scan).astype(str).str.strip()
         vals=vals[vals.str.len()>0]
         if not len(vals): continue
         hits=vals.apply(lambda v: bool(ASIN_RE.match(clean_asin(v)))).sum()
         score=hits/len(vals)
         if score>best_score: best_score,best_col=score,col
-    return (best_col,round(best_score*100,1)) if best_score>=0.5 else (None,0.0)
+    # Third: if still not found, scan entire column for any ASIN-like values
+    if best_score < 0.3:
+        for col in df.columns:
+            vals = df[col].astype(str).str.strip()
+            hits = vals.apply(lambda v: bool(ASIN_RE.match(clean_asin(v)))).sum()
+            if hits > 0:
+                score = hits / max(len(vals),1)
+                if score > best_score: best_score, best_col = score, col
+    return (best_col,round(best_score*100,1)) if best_score>=0.1 else (None,0.0)
 
 def get_src_val(row_dict, *aliases):
     for alias in aliases:
@@ -226,12 +240,23 @@ def get_src_val(row_dict, *aliases):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  FILE READERS
 # ═══════════════════════════════════════════════════════════════════════════════
-def read_file(f):
+def read_file(f, all_sheets=False):
     if f is None: return pd.DataFrame()
     try:
         f.seek(0)
-        return pd.read_csv(f,dtype=str).fillna("") if f.name.lower().endswith(".csv") \
-               else pd.read_excel(f,dtype=str).fillna("")
+        if f.name.lower().endswith(".csv"):
+            return pd.read_csv(f, dtype=str).fillna("")
+        if all_sheets:
+            xl = pd.ExcelFile(f)
+            dfs = []
+            for sheet in xl.sheet_names:
+                try:
+                    df_s = pd.read_excel(xl, sheet_name=sheet, dtype=str).fillna("")
+                    if not df_s.empty: dfs.append(df_s)
+                except: pass
+            if not dfs: return pd.DataFrame()
+            return pd.concat(dfs, ignore_index=True).fillna("")
+        return pd.read_excel(f, dtype=str).fillna("")
     except Exception as e:
         st.error(f"Cannot read {f.name}: {e}"); return pd.DataFrame()
 
@@ -282,8 +307,13 @@ def build_fba_map(df):
     return m,ac,ap
 
 def build_generic_map(df):
-    """Build ASIN map from any file — pattern-based detection."""
+    """Build ASIN map from any file — pattern + header based detection. Handles all sheets."""
+    if df.empty: return {}, None
     ac,ap=detect_asin_col(df)
+    if not ac:
+        # fallback: look for any column with 'asin' in name
+        for col in df.columns:
+            if "asin" in str(col).lower(): ac=col; break
     if not ac: return {},None
     m={}
     for _,r in df.iterrows():
@@ -576,7 +606,7 @@ with tab_upload:
 
             opt_maps2={}
             for i,(lbl,fobj) in enumerate(optional_files.items()):
-                df_opt=read_file(fobj)
+                df_opt=read_file(fobj, all_sheets=True)
                 omap,_=build_generic_map(df_opt)
                 if omap: opt_maps2[lbl]=omap
                 pb.progress(55+int(20*(i+1)/max(1,len(optional_files))))
