@@ -358,52 +358,96 @@ def db_connected():
 
 def push_to_db(fba_map,arch_left,arch_right,rb_set,optional_maps):
     sb=get_sb()
-    if not sb: return False,""
+    if not sb: return False,"",{}
     try:
-        def upsert_chunks(table,rows,pk="asin"):
-            sb.table(table).delete().neq(pk,"__x__").execute()
-            for i in range(0,len(rows),500):
-                sb.table(table).insert(rows[i:i+500]).execute()
+        def delete_all(table, pk="asin"):
+            # delete in chunks to avoid timeout
+            try: sb.table(table).delete().neq(pk,"__placeholder_xyz__").execute()
+            except: pass
 
-        upsert_chunks("fba_inventory",[{"asin":k,"data":v} for k,v in list(fba_map.items())[:8000]])
-        arch_rows=[{"asin":k,"side":"A-Z","data":v} for k,v in list(arch_left.items())[:8000]] + \
-                  [{"asin":k,"side":"Z-A","data":v} for k,v in list(arch_right.items())[:8000]]
-        upsert_chunks("archive_inventory",arch_rows)
-        upsert_chunks("restricted_brands",[{"brand":b} for b in list(rb_set)[:3000]],"brand")
+        def insert_chunks(table, rows, chunk=200):
+            for i in range(0, len(rows), chunk):
+                sb.table(table).insert(rows[i:i+chunk]).execute()
 
-        # optional files stored as generic_sources
+        # FBA inventory
+        delete_all("fba_inventory")
+        fba_rows=[{"asin":k,"data":v} for k,v in list(fba_map.items())]
+        insert_chunks("fba_inventory", fba_rows)
+
+        # Archive inventory
+        delete_all("archive_inventory")
+        arch_rows=[{"asin":k,"side":"A-Z","data":v} for k,v in list(arch_left.items())] +                   [{"asin":k,"side":"Z-A","data":v} for k,v in list(arch_right.items())]
+        insert_chunks("archive_inventory", arch_rows)
+
+        # Restricted brands
+        delete_all("restricted_brands", pk="brand")
+        rb_rows=[{"brand":b} for b in list(rb_set)]
+        insert_chunks("restricted_brands", rb_rows)
+
+        # Optional files
         if optional_maps:
+            delete_all("optional_sources")
             opt_rows=[]
             for label,omap in optional_maps.items():
-                for asin,row in list(omap.items())[:5000]:
+                for asin,row in omap.items():
                     opt_rows.append({"asin":asin,"source_label":label,"data":row})
-            if opt_rows:
-                sb.table("optional_sources").delete().neq("asin","__x__").execute()
-                for i in range(0,len(opt_rows),500):
-                    sb.table("optional_sources").insert(opt_rows[i:i+500]).execute()
-        return True,""
-    except Exception as e: return False,str(e)
+            if opt_rows: insert_chunks("optional_sources", opt_rows)
+
+        # Verify counts
+        counts={
+            "fba": sb.table("fba_inventory").select("asin",count="exact").execute().count,
+            "arch": sb.table("archive_inventory").select("asin",count="exact").execute().count,
+            "rb": sb.table("restricted_brands").select("brand",count="exact").execute().count,
+        }
+        return True,"",counts
+    except Exception as e: return False,str(e),{}
 
 def fetch_from_db(asins):
+    """Fetch source data for given ASINs — handles Supabase 1000-row limit."""
     sb=get_sb()
     if not sb: return {},{},{},set(),{}
     try:
         al=list(set(asins))
-        fba_r=sb.table("fba_inventory").select("asin,data").in_("asin",al).execute()
-        fba_map={r["asin"]:r["data"] for r in (fba_r.data or [])}
-        arch_r=sb.table("archive_inventory").select("asin,side,data").in_("asin",al).execute()
+
+        def fetch_in_chunks(table, select_cols, asin_col, items, chunk=200):
+            """Fetch rows matching items list in chunks to bypass 1000-row limit."""
+            results=[]
+            for i in range(0,len(items),chunk):
+                batch=items[i:i+chunk]
+                r=sb.table(table).select(select_cols).in_(asin_col,batch).execute()
+                results.extend(r.data or [])
+            return results
+
+        # FBA — fetch only ASINs we need, in chunks
+        fba_rows=fetch_in_chunks("fba_inventory","asin,data","asin",al)
+        fba_map={r["asin"]:r["data"] for r in fba_rows}
+
+        # Archive — fetch only ASINs we need, in chunks
+        arch_rows=fetch_in_chunks("archive_inventory","asin,side,data","asin",al)
         arch_l,arch_rr={},{}
-        for r in (arch_r.data or []):
+        for r in arch_rows:
             if r["side"]=="A-Z": arch_l[r["asin"]]=r["data"]
             else:                arch_rr[r["asin"]]=r["data"]
-        rb_r=sb.table("restricted_brands").select("brand").execute()
-        rb_set=set(r["brand"].lower().strip() for r in (rb_r.data or []))
+
+        # Restricted brands — fetch all (small table)
+        rb_all=[]
+        page=0
+        while True:
+            rb_r=sb.table("restricted_brands").select("brand").range(page*1000,(page+1)*1000-1).execute()
+            if not rb_r.data: break
+            rb_all.extend(rb_r.data)
+            if len(rb_r.data)<1000: break
+            page+=1
+        rb_set=set(r["brand"].lower().strip() for r in rb_all)
+
+        # Optional sources — fetch only ASINs we need
         try:
-            opt_r=sb.table("optional_sources").select("asin,source_label,data").in_("asin",al).execute()
+            opt_rows=fetch_in_chunks("optional_sources","asin,source_label,data","asin",al)
             opt_maps={}
-            for r in (opt_r.data or []):
+            for r in opt_rows:
                 opt_maps.setdefault(r["source_label"],{})[r["asin"]]=r["data"]
         except: opt_maps={}
+
         return fba_map,arch_l,arch_rr,rb_set,opt_maps
     except Exception as e:
         st.error(f"DB fetch error: {e}"); return {},{},{},set(),{}
@@ -612,9 +656,9 @@ with tab_upload:
                 pb.progress(55+int(20*(i+1)/max(1,len(optional_files))))
 
             if connected:
-                ok,err=push_to_db(fba_map2,arch_l2,arch_r2,rb_set2,opt_maps2); pb.progress(100)
+                ok,err,counts=push_to_db(fba_map2,arch_l2,arch_r2,rb_set2,opt_maps2); pb.progress(100)
                 if ok:
-                    st.success(f"✅ Database updated — FBA: {len(fba_map2):,} · Archive L: {len(arch_l2):,} · Archive R: {len(arch_r2):,} · Restricted: {len(rb_set2):,} · Optional files: {len(opt_maps2)}")
+                    st.success(f"✅ Database verified — FBA: {counts.get('fba',0):,} rows stored · Archive: {counts.get('arch',0):,} rows stored · Restricted: {counts.get('rb',0):,} brands · Optional: {len(opt_maps2)} files")
                     st.session_state.source_loaded=True
                 else: st.error(f"Upload failed: {err}")
             else:
@@ -711,6 +755,9 @@ with tab_run:
         if db_connected():
             fba_map,arch_left,arch_right,restricted_set,opt_maps=fetch_from_db(all_asins)
             log(f"◆ SOURCE FROM SUPABASE — FBA:{len(fba_map):,} | Arch:{len(arch_left)+len(arch_right):,} | RB:{len(restricted_set):,} | OptFiles:{len(opt_maps)}","head")
+            if len(fba_map)==0:
+                log("  ⚠ FBA returned 0 rows from DB — go to Update Database tab and re-upload source files","warn")
+                st.warning("⚠️ FBA Inventory not found in database. Please go to **Update Database** tab and re-upload your 3 source files first.")
         elif st.session_state.source_loaded and "_src" in st.session_state:
             src=st.session_state["_src"]
             fba_map=src["fba"]; arch_left=src["arch_l"]; arch_right=src["arch_r"]
