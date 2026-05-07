@@ -27,7 +27,7 @@ st.set_page_config(
 # ═══════════════════════════════════════════════════════════════════════════════
 def get_logo_b64():
     try:
-        p = Path(__file__).parent / "virventures_com_logo.jpg"
+        p = Path(__file__).parent / "logo.jpg"
         if p.exists(): return base64.b64encode(p.read_bytes()).decode()
     except: pass
     return None
@@ -570,7 +570,9 @@ with tab_upload:
             rb_df2=read_file(up_rb);   pb.progress(18)
             fba_map2,_,_=build_fba_map(fba_df2); pb.progress(30)
             arch_l2,arch_r2=read_archive_dual(up_arch); pb.progress(48)
-            rb_set2=set(rb_df2[rb_df2.columns[0]].str.strip().str.lower().dropna()); pb.progress(55)
+            if fba_df2.empty: st.error("❌ FBA Inventory could not be read. Re-upload."); st.stop()
+            if rb_df2.empty: st.error("❌ Restricted Brands could not be read. Re-upload."); st.stop()
+            rb_set2=set(rb_df2.iloc[:,0].astype(str).str.strip().str.lower().dropna()); pb.progress(55)
 
             opt_maps2={}
             for i,(lbl,fobj) in enumerate(optional_files.items()):
@@ -688,7 +690,7 @@ with tab_run:
             fba_df2=read_file(fba_file); rb_df2=read_file(rb_file)
             fba_map,_,_=build_fba_map(fba_df2)
             arch_left,arch_right=read_archive_dual(arch_file)
-            restricted_set=set(rb_df2[rb_df2.columns[0]].str.strip().str.lower().dropna())
+            restricted_set=set(rb_df2.iloc[:,0].astype(str).str.strip().str.lower().dropna()) if not rb_df2.empty else set()
             opt_maps={}
             log(f"◆ SOURCE FROM FILES — FBA:{len(fba_map):,} | Arch:{len(arch_left)+len(arch_right):,}","head")
         prog.progress(40)
