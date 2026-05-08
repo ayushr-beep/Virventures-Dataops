@@ -543,8 +543,8 @@ for k,v in [("run_result",None),("vendor_history",[]),("source_loaded",False)]:
 # ═══════════════════════════════════════════════════════════════════════════════
 #  TABS
 # ═══════════════════════════════════════════════════════════════════════════════
-tab_run, tab_upload, tab_dash, tab_history, tab_map = st.tabs([
-    "⚡  Run Analysis","☁️  Update Database","📊  Dashboard","📈  History","📋  Column Map"
+tab_run, tab_upload, tab_dash, tab_history, tab_map, tab_verify = st.tabs([
+    "⚡  Run Analysis","☁️  Update Database","📊  Dashboard","📈  History","📋  Column Map","🔍  Verify"
 ])
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -975,3 +975,159 @@ with tab_history:
         s=hdf.groupby("Vendor").agg({"Rows":"sum","Match %":"mean","Cells Filled":"sum","Restricted":"sum","Anomalies":"sum","Unmatched":"sum"}).round(1).reset_index()
         st.dataframe(s,use_container_width=True,hide_index=True)
         if st.button("🗑  Clear history"): st.session_state.vendor_history=[]; st.rerun()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TAB — VERIFY
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_verify:
+    st.markdown('<div class="section-title">🔍 ASIN Verification — Side by Side</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-sub">Type any ASIN to see exactly what the tool fetched vs what is in the source database. Use this to validate accuracy before trusting the tool.</div>', unsafe_allow_html=True)
+
+    if not db_connected() and not st.session_state.source_loaded:
+        st.markdown('<div class="alert-box alert-amber">⚠️ No source data loaded. Go to Update Database tab first.</div>', unsafe_allow_html=True)
+    elif not st.session_state.run_result:
+        st.markdown('<div class="alert-box alert-blue">Run the analysis engine first — then come here to verify any ASIN from your output.</div>', unsafe_allow_html=True)
+    else:
+        r = st.session_state.run_result
+        out_df = r["out_df"]
+
+        # ASIN input
+        col_in, col_btn = st.columns([3,1])
+        with col_in:
+            verify_asin = st.text_input("Enter ASIN to verify", placeholder="e.g. B07QNLTK2M", key="verify_asin_input").strip().upper()
+        with col_btn:
+            st.markdown("<br>", unsafe_allow_html=True)
+            do_verify = st.button("🔍 Verify", use_container_width=True, type="primary")
+
+        # Quick pick from output
+        st.markdown("<div class='card-sub' style='margin-top:0.5rem'>Or pick from your last run:</div>", unsafe_allow_html=True)
+        asin_col_v = r.get("an_asin_col") or "Output ASIN"
+        if asin_col_v in out_df.columns:
+            sample_asins = out_df[asin_col_v].dropna().head(20).tolist()
+            sample_asins = [a for a in sample_asins if is_asin(clean_asin(str(a)))][:10]
+            if sample_asins:
+                picked = st.selectbox("Quick pick ASIN", ["— select —"] + sample_asins, key="verify_pick")
+                if picked != "— select —":
+                    verify_asin = picked
+
+        if verify_asin and (do_verify or picked != "— select —" if "verify_pick" in st.session_state else do_verify):
+            if not is_asin(verify_asin):
+                st.markdown('<div class="alert-box alert-red">❌ Not a valid ASIN format. Must be like B07QNLTK2M</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f"<hr class='divhr'>", unsafe_allow_html=True)
+                st.markdown(f'<div class="section-title">Verification Report — <code style="color:#F47920">{verify_asin}</code></div>', unsafe_allow_html=True)
+
+                # Fetch from DB
+                fba_v, arch_l_v, arch_r_v, rb_v, opt_v = fetch_from_db([verify_asin])
+                fba_row   = fba_v.get(verify_asin, {})
+                arch_l_row = arch_l_v.get(verify_asin, {})
+                arch_r_row = arch_r_v.get(verify_asin, {})
+
+                # Get output row
+                asin_col_out = r.get("an_asin_col","Output ASIN")
+                out_row = {}
+                if asin_col_out in out_df.columns:
+                    match = out_df[out_df[asin_col_out].astype(str).str.strip().str.upper() == verify_asin]
+                    if not match.empty:
+                        out_row = match.iloc[0].to_dict()
+
+                if not fba_row and not arch_l_row and not arch_r_row:
+                    st.markdown(f'<div class="alert-box alert-red">❌ ASIN <strong>{verify_asin}</strong> not found in database. This is why it shows as unmatched in your output.</div>', unsafe_allow_html=True)
+                else:
+                    # Build comparison table
+                    verify_cols = [
+                        ("Stock",                      fba_row.get("STOCK","—"),                   out_row.get("Stock","—"),        "FBA → STOCK"),
+                        ("Reserve",                    fba_row.get("RESERVE","—"),                 out_row.get("Reserve","—"),      "FBA → RESERVE"),
+                        ("Inbound",                    fba_row.get("INBOUND","—"),                 out_row.get("Inbound","—"),      "FBA → INBOUND"),
+                        ("TOTAL",                      fba_row.get("afn-total-quantity","—"),       out_row.get("TOTAL(Stock+Reserve+inbound)","—"), "FBA → afn-total-quantity"),
+                        ("Listing Status",             fba_row.get("afn-listing-exists","—"),       out_row.get("Listing Status","—"),  "FBA → afn-listing-exists"),
+                        ("Sales 30",                   fba_row.get("Sales 30","—"),                 out_row.get("Sales 30","—"),     "FBA → Sales 30"),
+                        ("Sales 3",                    fba_row.get("Sales 3","—"),                  out_row.get("Sales 3","—"),      "FBA → Sales 3"),
+                        ("Sales 1",                    fba_row.get("Sales 1","—"),                  out_row.get("Sales 1","—"),      "FBA → Sales 1"),
+                        ("INV(A-Z) / SKU",             arch_l_row.get("sku","—"),                   out_row.get("INV(A-Z)","—"),     "Archive(A-Z) → sku"),
+                        ("INV(Z-A) / SKU",             arch_r_row.get("sku","—"),                   out_row.get("INV(Z-A)","—"),     "Archive(Z-A) → sku"),
+                        ("Days of stock(30)",          "calculated",                                 out_row.get("Days of stock(30)","—"), "Stock ÷ (Sales30÷30)"),
+                        ("Days of stock(3)",           "calculated",                                 out_row.get("Days of stock(3)","—"),  "Stock ÷ (Sales3÷3)"),
+                    ]
+
+                    mismatches = 0
+                    rows_html = ""
+                    for col_name, source_val, output_val, logic in verify_cols:
+                        sv = str(source_val).strip()
+                        ov = str(output_val).strip()
+
+                        # Check match
+                        if sv == "—" and ov in ("N/A","—",""):
+                            status = "⚪ No data"
+                            row_color = ""
+                        elif sv == "calculated":
+                            status = "🔵 Calculated"
+                            row_color = ""
+                        elif sv == ov or (sv.replace(".0","") == ov.replace(".0","")):
+                            status = "✅ Match"
+                            row_color = "background:#F0FDF4;"
+                        elif sv == "—" and ov not in ("N/A","—",""):
+                            status = "🟡 Output has value, source empty"
+                            row_color = "background:#FFFBEB;"
+                            mismatches += 1
+                        elif sv != "—" and ov in ("N/A","—",""):
+                            status = "🔴 Source has value but output is N/A"
+                            row_color = "background:#FEF2F2;"
+                            mismatches += 1
+                        elif sv != ov:
+                            status = "🔴 Mismatch"
+                            row_color = "background:#FEF2F2;"
+                            mismatches += 1
+                        else:
+                            status = "✅ Match"
+                            row_color = "background:#F0FDF4;"
+
+                        rows_html += f"""
+                        <tr style="{row_color}">
+                            <td><strong>{col_name}</strong></td>
+                            <td><code>{sv}</code></td>
+                            <td><code>{ov}</code></td>
+                            <td style="font-size:0.75rem;color:#6B7280">{logic}</td>
+                            <td>{status}</td>
+                        </tr>"""
+
+                    st.markdown(f"""
+                    <table class="map-table">
+                    <tr>
+                        <th>Column</th>
+                        <th>Source (DB)</th>
+                        <th>Output (filled)</th>
+                        <th>Logic</th>
+                        <th>Status</th>
+                    </tr>
+                    {rows_html}
+                    </table>
+                    """, unsafe_allow_html=True)
+
+                    # Summary verdict
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if mismatches == 0:
+                        st.markdown(f'<div class="alert-box alert-green">✅ <strong>All values verified — 100% accurate for {verify_asin}</strong>. Source data matches output exactly.</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="alert-box alert-red">⚠️ <strong>{mismatches} mismatch(es) found for {verify_asin}</strong>. Check the red rows above — this ASIN may need re-processing.</div>', unsafe_allow_html=True)
+
+                    # Restricted check
+                    brand_col_v = r.get("an_brand_col","Brand")
+                    brand_v = str(out_row.get(brand_col_v,"")).strip().lower() if out_row else ""
+                    if brand_v and brand_v in rb_v:
+                        st.markdown(f'<div class="alert-box alert-red">🚫 Brand <strong>"{brand_v}"</strong> is in the Restricted Brands list.</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="alert-box alert-green">✅ Brand is not restricted.</div>', unsafe_allow_html=True)
+
+                    # Raw DB data expander
+                    with st.expander("🗄️ View raw database record for this ASIN"):
+                        c1,c2,c3 = st.columns(3)
+                        with c1:
+                            st.markdown("**FBA Inventory**")
+                            st.json(fba_row if fba_row else {"status": "not found"})
+                        with c2:
+                            st.markdown("**Archive (A-Z)**")
+                            st.json(arch_l_row if arch_l_row else {"status": "not found"})
+                        with c3:
+                            st.markdown("**Archive (Z-A)**")
+                            st.json(arch_r_row if arch_r_row else {"status": "not found"})
